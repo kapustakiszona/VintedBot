@@ -1,0 +1,5 @@
+aiogram<4.0
+pydantic-settings
+aiosqlite
+python-decouple
+sqlalchemy
