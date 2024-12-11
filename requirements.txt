@@ -3,3 +3,6 @@ pydantic-settings
 aiosqlite
 python-decouple
 sqlalchemy
+selenium
+webdriver-manager
+requests<2.32.3
