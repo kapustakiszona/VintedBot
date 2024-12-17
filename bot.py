@@ -11,7 +11,7 @@ from scraper.scraper import periodic_check
 
 # Функция, которая настроит командное меню (дефолтное для всех пользователей)
 async def set_commands():
-    commands = [BotCommand(command='start', description='Старт')]
+    commands = [BotCommand(command='start', description='Start')]
     await bot.set_my_commands(commands, BotCommandScopeDefault())
 
 

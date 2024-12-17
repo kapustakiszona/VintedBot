@@ -1,11 +1,11 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, delete, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 
 from data_base.base import connection
-from data_base.models import User, Link
+from data_base.models import User, Link, SentItem
 
 
 @connection
@@ -56,6 +56,7 @@ from sqlalchemy import text
 @connection
 async def add_sent_item(session, item_id: int, link, title: str, img_url: str, item_url: str):
     try:
+        await enforce_limit_on_sent_items( link.id)
         query = """
             INSERT INTO sent_items (item_id, title, img_url, item_url, link_id)
             SELECT :item_id, :title, :img_url, :item_url, :link_id
@@ -170,3 +171,34 @@ async def get_users_link_list(session, user_id: int):
     except SQLAlchemyError as e:
         logging.error(f"Ошибка при получении пользователя с ID {user_id}: {e}")
         return None
+
+@connection
+async def enforce_limit_on_sent_items(session, link_id: int, limit: int = 100):
+    """Удаляет старейшие записи, если их количество превышает указанный лимит."""
+    try:
+        # Подсчёт количества записей для данной ссылки
+        count_query = select(func.count(SentItem.id)).where(SentItem.link_id == link_id)
+        count_result = await session.scalar(count_query)
+        # Логирование количества записей перед любой операцией
+        logging.info(f"Количество записей для link_id {link_id} до проверки: {count_result}")
+        # Проверка, превышает ли количество записей лимит
+        if count_result > limit:
+            # Вычисляем количество записей, которые нужно удалить
+            excess_count = count_result - limit
+            # Подзапрос для получения ID старейших записей с сортировкой по created_at
+            subquery = (
+                select(SentItem.id)
+                .where(SentItem.link_id == link_id)
+                .order_by(SentItem.created_at.asc())
+                .limit(excess_count)
+            )
+            # Удаление записей по выбранным ID из подзапроса
+            delete_query = delete(SentItem).where(SentItem.id.in_(subquery))
+            delete_result = await session.execute(delete_query)
+            await session.commit()
+            logging.info(f"Удалено {delete_result.rowcount} старых записей для link_id {link_id}.")
+        else:
+            logging.info(f"Количество записей для link_id {link_id} не превышает лимит в {limit}.")
+    except SQLAlchemyError as e:
+        logging.error(f"Ошибка при ограничении записей: {e}")
+        await session.rollback()

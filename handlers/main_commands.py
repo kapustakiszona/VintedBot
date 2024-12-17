@@ -32,6 +32,7 @@ async def cmd_start(message: Message, state: FSMContext):
     # Приветственное сообщение и клавиатура
     await message.answer(
         "Hi! I am Vinted tracker bot!\n"
+        "Enter Help to get information on how to work with the bot or\n"
         "Select an action using the buttons below:",
         reply_markup=keyboard.as_markup(resize_keyboard=True)
     )
@@ -121,6 +122,8 @@ async def help_user(message: Message):
         " -After this, copy the resulting link from the browser and add it to the bot.\n"
         "Remove link - Remove link from tracking\n"
         "Show list - Show all added tracking links\n"
-        "Help - Information about the bot"
+        "Help - Information about the bot\n"
+        "\n"
+        "📣To get premium access or if you have any questions or problems, write to @KierownikBoss\n"
     )
     await message.answer(help_text)

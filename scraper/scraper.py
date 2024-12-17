@@ -1,4 +1,6 @@
 import asyncio
+import logging
+
 import aiohttp
 from typing import Optional, List
 
@@ -23,10 +25,10 @@ async def _fetch_cookie(baseurl: str, user_agent: str, retries: int = 3) -> str:
                             return session_cookie
                     await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка
         except aiohttp.ClientError as e:
-            print(f"Ошибка сети: {e}. Попытка {attempt + 1} из {retries}.")
+            logging.error(f"Ошибка сети: {e}. Попытка {attempt + 1} из {retries}.")
             await asyncio.sleep(2 ** attempt)
         except asyncio.TimeoutError:
-            print(f"Timeout on attempt {attempt + 1}")
+            logging.error(f"Timeout on attempt {attempt + 1}")
 
     raise RuntimeError(
         f"Не удалось получить cookie с {baseurl}. Статус: "
@@ -42,11 +44,11 @@ async def fetch_data(url: str, headers: dict) -> Optional[dict]:
                 if response.status == 200:
                     return await response.json()
                 else:
-                    print(f"Ошибка: {response.status}, текст: {await response.text()}")
+                    logging.error(f"Ошибка: {response.status}, текст: {await response.text()}")
     except aiohttp.ClientError as e:
-        print(f"Ошибка запроса: {e}")
+        logging.error(f"Ошибка запроса: {e}")
     except ValueError:
-        print("Ответ не является JSON.")
+        logging.error("Ответ не является JSON.")
     return None
 
 
@@ -55,7 +57,7 @@ async def fetch_data(url: str, headers: dict) -> Optional[dict]:
 async def parse_items(session, items_data: List[dict], user_id: int, link, bot: Bot) -> List[str]:
     new_items = []
     if not items_data:
-        print("Нет данных для обработки.")
+        logging.info("Нет данных для обработки.")
         return new_items
 
     for item in items_data:
@@ -116,9 +118,9 @@ async def get_items_for_user(user_id: int, bot: Bot):
         if data:
             new_items = await parse_items(data.get('items', []), user_id, link, bot)
             if new_items:
-                print(f"New items found for user {user_id}: {new_items}")
+                logging.info(f"New items found for user {user_id}: {new_items}")
         else:
-            print("Ошибка при получении данных.")
+            logging.error("Ошибка при получении данных.")
 
 
 # Периодическая проверка новых товаров для всех пользователей
@@ -129,6 +131,6 @@ async def periodic_check(bot: Bot):
         try:
             await asyncio.gather(*tasks)
         except Exception as e:
-            print(f"An error occurred while gathering tasks: {e}")
+            logging.error(f"An error occurred while gathering tasks: {e}")
 
         await asyncio.sleep(15)
