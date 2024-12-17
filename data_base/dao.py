@@ -5,7 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 
 from data_base.base import connection
-from data_base.models import User, Link, SentItem
+from data_base.models import User, Link
 
 
 @connection
@@ -13,17 +13,20 @@ async def add_user(session, user_id: int, is_premium: bool = False, is_admin: bo
     try:
         user = await session.scalar(select(User).filter_by(user_id=user_id))
         if not user:
+            # Если пользователя нет, создаем нового
             new_user = User(user_id=user_id, is_premium=is_premium, is_admin=is_admin, is_banned=is_banned)
             session.add(new_user)
             await session.commit()
+            await session.refresh(new_user)  # Обновим объект, чтобы он содержал ID из базы данных
             logging.info(f"Зарегистрировал пользователя с ID {user_id}!")
-            return None
+            return new_user  # Возвращаем только что созданного пользователя
         else:
             logging.info(f"Пользователь с ID {user_id} найден!")
-            return user
+            return user  # Если пользователь уже существует, возвращаем его
     except SQLAlchemyError as e:
         logging.error(f"Ошибка при добавлении пользователя: {e}")
         await session.rollback()
+        return None  # В случае ошибки возвращаем None
 
 
 @connection
@@ -47,29 +50,42 @@ async def add_link(session, user_id: int, link: str):
         await session.rollback()
 
 
+from sqlalchemy import text
+
+
 @connection
 async def add_sent_item(session, item_id: int, link, title: str, img_url: str, item_url: str):
     try:
-        sent_item_exists = await session.scalar(
-            select(SentItem).filter_by(item_id=item_id, link_id=link.id).exists()
+        query = """
+            INSERT INTO sent_items (item_id, title, img_url, item_url, link_id)
+            SELECT :item_id, :title, :img_url, :item_url, :link_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM sent_items 
+                WHERE item_id = :item_id AND link_id = :link_id
+            )
+        """
+        result = await session.execute(
+            text(query),
+            {
+                "item_id": item_id,
+                "title": title,
+                "img_url": img_url,
+                "item_url": item_url,
+                "link_id": link.id
+            }
         )
-        if sent_item_exists:
-            logging.info(f"SentItem с ID {item_id} уже существует в Link ID {link.id}.")
-            return None
-
-        new_sent_item = SentItem(
-            item_id=item_id,
-            title=title,
-            img_url=img_url,
-            item_url=item_url,
-            link_id=link.id
-        )
-        session.add(new_sent_item)
         await session.commit()
-        logging.info(f"SentItem с ID {item_id} добавлен в Link ID {link.id}.")
+
+        if result.rowcount == 1:  # Успешная вставка
+            logging.info(f"SentItem с ID {item_id} успешно добавлен в Link ID {link.id}.")
+            return True
+        else:  # Вставка не была выполнена, так как запись уже существует
+            logging.info(f"SentItem с ID {item_id} уже существует в Link ID {link.id}.")
+            return False
     except SQLAlchemyError as e:
         logging.error(f"Ошибка при добавлении sent_item: {e}")
         await session.rollback()
+        return None
 
 
 @connection

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Integer, ForeignKey, BigInteger, String
+from sqlalchemy import Boolean, Integer, ForeignKey, BigInteger, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from data_base.database import Base
 
@@ -31,9 +31,12 @@ class Link(Base):
 class SentItem(Base):
     __tablename__ = "sent_items"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)  # Уникальный ID записи
-    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)  # Уникальный ID товара
+    item_id: Mapped[int] = mapped_column(BigInteger, nullable=False)  # Уникальный ID товара
     title: Mapped[str] = mapped_column(String, nullable=False)  # Название товара
     img_url: Mapped[str] = mapped_column(String, nullable=False)  # URL изображения
     item_url: Mapped[str] = mapped_column(String, nullable=False)  # URL товара
     link_id: Mapped[int] = mapped_column(ForeignKey("links.id"), nullable=False)  # Связь с таблицей ссылок
     link: Mapped["Link"] = relationship("Link", back_populates="sent_items")# Связь с таблицей Link
+    __table_args__ = (
+        UniqueConstraint('item_id', 'link_id', name='_item_link_uc'),  # Добавлен составной уникальный индекс
+    )

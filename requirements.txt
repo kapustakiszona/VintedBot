@@ -1,8 +1,10 @@
 aiogram<4.0
-pydantic-settings
+pydantic-settings~=2.6.1
 aiosqlite
 python-decouple
-sqlalchemy
+sqlalchemy~=2.0.36
 selenium
 webdriver-manager
 requests<2.32.3
+aiohttp~=3.10.11
+pydantic~=2.9.2

@@ -1,10 +1,12 @@
 import asyncio
+import logging
+
 from create_bot import bot, dp, admins
 from data_base.base import create_tables
 from aiogram.types import BotCommand, BotCommandScopeDefault
-
 from handlers.admin_commands import admin_router
 from handlers.main_commands import router
+from scraper.scraper import periodic_check
 
 
 # Функция, которая настроит командное меню (дефолтное для всех пользователей)
@@ -20,8 +22,11 @@ async def start_bot():
     for admin_id in admins:
         try:
             await bot.send_message(admin_id, f'Я запущен🥳.')
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Ошибка при отправке сообщения админу {admin_id}: {e}")
+
+    # Запускаем периодическую проверку новых товаров
+    asyncio.create_task(periodic_check(bot))
 
 
 # Функция, которая выполнится когда бот завершит свою работу
@@ -29,8 +34,8 @@ async def stop_bot():
     try:
         for admin_id in admins:
             await bot.send_message(admin_id, 'Бот остановлен. За что?😔')
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"Ошибка при отправке сообщения админу при остановке бота: {e}")
 
 
 async def main():
@@ -41,7 +46,6 @@ async def main():
     # регистрация функций
     dp.startup.register(start_bot)
     dp.shutdown.register(stop_bot)
-
     # запуск бота в режиме long polling при запуске бот очищает все обновления, которые были за его моменты бездействия
     try:
         await bot.delete_webhook(drop_pending_updates=True)
