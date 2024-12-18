@@ -66,9 +66,9 @@ async def parse_items(session, items_data: List[dict], user_id: int, link, bot: 
         item_photo = item.get("photo").get("url")
         item_brand_title = item.get("brand_title")
         item_title = item.get("title")
-        item_price = item.get("total_item_price").get("amount") + item.get("total_item_price").get("currency_code")
+        item_price = item.get("total_item_price").get("amount") +" "+ item.get("total_item_price").get("currency_code")
         builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="Show", url=item_url))
+        builder.row(types.InlineKeyboardButton(text="👀Show", url=item_url))
         if item_id and item_title and item_url:
             # Проверка, есть ли этот товар уже в базе
             async with session.begin():

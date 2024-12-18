@@ -1,7 +1,10 @@
+import logging
+
 from aiogram import Router, F
+from aiogram.exceptions import TelegramRetryAfter, TelegramAPIError, TelegramNotFound, TelegramForbiddenError
 from aiogram.types import Message
 
-from create_bot import admins
+from create_bot import admins, bot
 from data_base.base import connection
 from data_base.dao import get_all_users, set_user_premium, set_user_ban
 from utils import split_message
@@ -17,6 +20,7 @@ async def administration(message: Message):
         admin_text = (
             "You are logged into the admin panel. Available commands:\n"
             "/view_users - Show all users\n"
+            "/send_message - Send a message to all users\n"
             "/grant_premium - Grant premium access to the user\n"
             "/ban_user - Ban user"
         )
@@ -52,6 +56,7 @@ async def view_user(message: Message):
 
     for part in split_message(response):
         await message.answer(part, parse_mode="Markdown")
+
 
 @connection
 @admin_router.message(F.text.startswith("/grant_premium"))
@@ -106,3 +111,30 @@ async def set_user_ban_status(message: Message):
     else:
         await message.answer(f"User with ID {target_user_id} not found or could not be updated.", parse_mode=None)
 
+
+@connection
+@admin_router.message(F.text.startswith("/send_message"))
+async def send_message(message: Message):
+    user_id = message.chat.id
+    if user_id not in admins:
+        await message.answer("You are not an admin.")
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Usage: /send_message <Text_message>", parse_mode=None)
+        return
+    users = await get_all_users()
+    for user in users:
+        try:
+            await bot.send_message(chat_id=user.user_id, text=parts[1], parse_mode="MarkdownV2")
+            logging.info(f"Сообщение отправлено пользователю с ID {user.user_id}.")
+        except TelegramForbiddenError:
+            logging.warning(f"Бот заблокирован пользователем с ID {user.user_id}.")
+        except TelegramNotFound:
+            logging.warning(f"Чат с пользователем ID {user.user_id} не найден.")
+        except TelegramRetryAfter as e:
+            logging.warning(f"Превышен лимит запросов. Повторите через {e.retry_after} секунд.")
+        except TelegramAPIError as e:
+            logging.error(f"Ошибка Telegram API при отправке пользователю {user.user_id}: {e}")
+        except Exception as e:
+            logging.error(f"Непредвиденная ошибка при отправке сообщения пользователю {user.user_id}: {e}")

@@ -21,7 +21,7 @@ async def start_bot():
     await create_tables()
     for admin_id in admins:
         try:
-            await bot.send_message(admin_id, f'Я запущен🥳.')
+            await bot.send_message(admin_id, f'Bot started.')
         except Exception as e:
             logging.error(f"Ошибка при отправке сообщения админу {admin_id}: {e}")
 
@@ -33,7 +33,7 @@ async def start_bot():
 async def stop_bot():
     try:
         for admin_id in admins:
-            await bot.send_message(admin_id, 'Бот остановлен. За что?😔')
+            await bot.send_message(admin_id, 'Bot stopped')
     except Exception as e:
         logging.error(f"Ошибка при отправке сообщения админу при остановке бота: {e}")
 
