@@ -14,7 +14,8 @@ async def add_user(session, user_id: int, is_premium: bool = False, is_admin: bo
         user = await session.scalar(select(User).filter_by(user_id=user_id))
         if not user:
             # Если пользователя нет, создаем нового
-            new_user = User(user_id=user_id, is_premium=is_premium, is_admin=is_admin, is_banned=is_banned)
+            new_user = User(user_id=user_id, is_premium=is_premium, is_admin=is_admin, is_banned=is_banned,
+                            filter_words=None)
             session.add(new_user)
             await session.commit()
             await session.refresh(new_user)  # Обновим объект, чтобы он содержал ID из базы данных
@@ -56,7 +57,7 @@ from sqlalchemy import text
 @connection
 async def add_sent_item(session, item_id: int, link, title: str, img_url: str, item_url: str):
     try:
-        await enforce_limit_on_sent_items( link.id)
+        await enforce_limit_on_sent_items(link.id)
         query = """
             INSERT INTO sent_items (item_id, title, img_url, item_url, link_id)
             SELECT :item_id, :title, :img_url, :item_url, :link_id
@@ -172,6 +173,7 @@ async def get_users_link_list(session, user_id: int):
         logging.error(f"Ошибка при получении пользователя с ID {user_id}: {e}")
         return None
 
+
 @connection
 async def enforce_limit_on_sent_items(session, link_id: int, limit: int = 100):
     """Удаляет старейшие записи, если их количество превышает указанный лимит."""
@@ -202,3 +204,75 @@ async def enforce_limit_on_sent_items(session, link_id: int, limit: int = 100):
     except SQLAlchemyError as e:
         logging.error(f"Ошибка при ограничении записей: {e}")
         await session.rollback()
+
+
+@connection
+async def get_user_filter_words(session, user_id: int) -> list[str]:
+    """Получает список слов-фильтров для пользователя."""
+    try:
+        user = await session.scalar(select(User).filter_by(user_id=user_id))
+        if user and user.filter_words:
+            return [word.strip().lower() for word in user.filter_words.split(',') if word.strip()]
+        return []
+    except SQLAlchemyError as e:
+        logging.error(f"Ошибка при получении слов-фильтров для пользователя {user_id}: {e}")
+        return []
+
+
+@connection
+async def add_user_filter_word(session, user_id: int, word: str) -> bool:
+    """Добавляет слово-фильтр пользователю."""
+    try:
+        user = await session.scalar(select(User).filter_by(user_id=user_id))
+        if not user:
+            logging.warning(f"Пользователь с ID {user_id} не найден.")
+            return False
+
+        word = word.strip().lower()
+        if not word:  # Не добавляем пустые слова
+            return False
+
+        current_words = []
+        if user.filter_words:
+            current_words = [w.strip().lower() for w in user.filter_words.split(',') if w.strip()]
+
+        if word not in current_words:
+            current_words.append(word)
+            user.filter_words = ",".join(current_words)
+            await session.commit()
+            logging.info(f"Слово-фильтр '{word}' добавлено для пользователя {user_id}.")
+            return True
+        else:
+            logging.info(f"Слово-фильтр '{word}' уже существует для пользователя {user_id}.")
+            return False  # Слово уже есть
+    except SQLAlchemyError as e:
+        logging.error(f"Ошибка при добавлении слова-фильтра для пользователя {user_id}: {e}")
+        await session.rollback()
+        return False
+
+
+@connection
+async def remove_user_filter_word(session, user_id: int, word: str) -> bool:
+    """Удаляет слово-фильтр у пользователя."""
+    try:
+        user = await session.scalar(select(User).filter_by(user_id=user_id))
+        if not user or not user.filter_words:
+            logging.warning(f"Пользователь с ID {user_id} не найден или нет слов-фильтров.")
+            return False
+
+        word_to_remove = word.strip().lower()
+        current_words = [w.strip().lower() for w in user.filter_words.split(',') if w.strip()]
+
+        if word_to_remove in current_words:
+            current_words.remove(word_to_remove)
+            user.filter_words = ",".join(current_words) if current_words else None
+            await session.commit()
+            logging.info(f"Слово-фильтр '{word_to_remove}' удалено для пользователя {user_id}.")
+            return True
+        else:
+            logging.info(f"Слово-фильтр '{word_to_remove}' не найдено у пользователя {user_id}.")
+            return False  # Слово не найдено
+    except SQLAlchemyError as e:
+        logging.error(f"Ошибка при удалении слова-фильтра для пользователя {user_id}: {e}")
+        await session.rollback()
+        return False

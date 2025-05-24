@@ -8,6 +8,10 @@ class MainStates(StatesGroup):
     waiting_for_link_removal = State()
     waiting_for_admin_action = State()
     waiting_for_generated_link_name = State()
+    waiting_for_filter_to_add = State()
+    waiting_for_filter_to_remove = State()
+    filter_management_menu = State()  # Состояние для отображения меню фильтров
+
 
 def unescape_url(escaped_url: str) -> str:
     # Декодируем URL-кодированную строку обратно в исходную

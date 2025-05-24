@@ -9,7 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, exists
 
 from data_base.base import connection
-from data_base.dao import add_sent_item, get_users_link_list, get_all_users
+from data_base.dao import add_sent_item, get_users_link_list, get_all_users, get_user_filter_words
 from data_base.models import SentItem
 from utils import convert_client_to_api_url
 
@@ -59,6 +59,7 @@ async def parse_items(session, items_data: List[dict], user_id: int, link, bot: 
     if not items_data:
         logging.info("Нет данных для обработки.")
         return new_items
+    user_filter_words = await get_user_filter_words(user_id=user_id)  # Получаем слова-фильтры пользователя
 
     for item in items_data:
         item_id = item.get("id")
@@ -66,7 +67,8 @@ async def parse_items(session, items_data: List[dict], user_id: int, link, bot: 
         item_photo = item.get("photo").get("url")
         item_brand_title = item.get("brand_title")
         item_title = item.get("title")
-        item_price = item.get("total_item_price").get("amount") +" "+ item.get("total_item_price").get("currency_code")
+        item_price = item.get("total_item_price").get("amount") + " " + item.get("total_item_price").get(
+            "currency_code")
         builder = InlineKeyboardBuilder()
         builder.row(types.InlineKeyboardButton(text="👀Show", url=item_url))
         if item_id and item_title and item_url:
@@ -80,20 +82,31 @@ async def parse_items(session, items_data: List[dict], user_id: int, link, bot: 
                     result = await add_sent_item(item_id=item_id, link=link, title=item_title,
                                                  img_url=item.get("photo", {}).get("url"), item_url=item_url)
                     new_items.append(f"New item found: {item_title} - {item_url}")
+
                     if result:
-                        formatted_string = (
-                            f"™️ <b>{item_brand_title}</b>\n"
-                            f"💵 <b>{item_price}</b>\n"
-                            f"📌 <b>{item_title}</b>"
-                        )
-                        # Отправить уведомление пользователю
-                        await bot.send_photo(
-                            chat_id=user_id,
-                            photo=item_photo,
-                            caption=formatted_string,
-                            reply_markup=builder.as_markup(),
-                            parse_mode="HTML"
-                        )
+                        send_notification = True
+                        # Проверка на слова-фильтры перед отправкой уведомления
+                        if user_filter_words:
+                            text_to_check = item_title.lower()  # Приводим название товара к нижнему регистру
+                            # get_user_filter_words уже возвращает слова в нижнем регистре
+                            if any(filter_word in text_to_check for filter_word in user_filter_words):
+                                send_notification = False
+                                logging.info(
+                                    f"Item '{item_title}' for user {user_id} filtered out. Not sending notification.")
+                        if send_notification:
+                            formatted_string = (
+                                f"™️ <b>{item_brand_title}</b>\n"
+                                f"💵 <b>{item_price}</b>\n"
+                                f"📌 <b>{item_title}</b>"
+                            )
+                            # Отправить уведомление пользователю
+                            await bot.send_photo(
+                                chat_id=user_id,
+                                photo=item_photo,
+                                caption=formatted_string,
+                                reply_markup=builder.as_markup(),
+                                parse_mode="HTML"
+                            )
     return new_items
 
 

@@ -11,6 +11,7 @@ class User(Base):
     is_premium: Mapped[bool] = mapped_column(Boolean, default=False)  # Премиум статус
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)  # Администратор
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)  # Забанен
+    filter_words: Mapped[str] = mapped_column(String, nullable=True)  # Слова-фильтры через запятую
     links: Mapped[list["Link"]] = relationship(
         "Link", back_populates="user", cascade="all, delete-orphan", lazy= "selectin"
     ) # Список ссылок пользователя
