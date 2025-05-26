@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta
 from typing import Optional, List
 
+import cloudscraper
 import aiohttp
 from aiogram import Bot, types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -13,46 +15,43 @@ from data_base.dao import add_sent_item, get_users_link_list, get_all_users, get
 from data_base.models import SentItem
 from utils import convert_client_to_api_url
 
+# Пул User-Agent для ротации
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.4 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.1901.183 Safari/537.36 Edg/115.0.1901.183",
+]
 
 class CookieManager:
-    def __init__(self, baseurl: str, user_agent: str, retries: int = 3):
+    def __init__(self, baseurl: str, user_agent: str):
         self.baseurl = baseurl
         self.user_agent = user_agent
-        self.retries = retries
         self.cookie: Optional[str] = None
         self.expiry: datetime = datetime.min
         self.lock = asyncio.Lock()
 
     async def _fetch_and_parse(self) -> None:
-        for attempt in range(self.retries):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(self.baseurl, headers={"User-Agent": self.user_agent}) as resp:
-                        resp.raise_for_status()
-                        raw = "; ".join(resp.headers.getall("Set-Cookie", []))
-                        # Парсим expires из заголовков Set-Cookie
-                        for part in raw.split(";"):
-                            if part.strip().lower().startswith("expires="):
-                                exp_str = part.split("=", 1)[1].strip()
-                                self.expiry = datetime.strptime(exp_str, "%a, %d %b %Y %H:%M:%S GMT")
-                                break
-                        self.cookie = raw
-                        return
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.error(f"Ошибка при получении куки: {e}. Попытка {attempt + 1} из {self.retries}.")
-                await asyncio.sleep(2 ** attempt)
-        raise RuntimeError(f"Не удалось получить куки с {self.baseurl} после {self.retries} попыток.")
+        # Используем cloudscraper для прохождения CF challenge
+        scraper = cloudscraper.create_scraper()
+        scraper.headers.update({"User-Agent": self.user_agent})
+        resp = scraper.get(self.baseurl)
+        if resp.status_code != 200:
+            raise RuntimeError(f"CF challenge failed: {resp.status_code}")
+        # Собираем куки и expiry не отслеживается (можно задать ttl вручную)
+        cookies = scraper.cookies.get_dict()
+        self.cookie = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        # Не все куки имеют expires, установим короткий TTL, чтобы обновлять часто
+        self.expiry = datetime.utcnow() + timedelta(minutes=30)
 
     async def get_cookie(self) -> str:
         async with self.lock:
-            # Обновляем за 10 секунд до истечения или если ещё не получали
-            if not self.cookie or datetime.utcnow() + timedelta(seconds=10) >= self.expiry:
+            if not self.cookie or datetime.utcnow() >= self.expiry:
                 await self._fetch_and_parse()
             return self.cookie or ""
 
 
 async def fetch_data(session: aiohttp.ClientSession, url: str, headers: dict) -> Optional[dict]:
-    """Асинхронное получение данных с заданного URL."""
     try:
         async with session.get(url, headers=headers) as response:
             if response.status == 200:
@@ -129,9 +128,14 @@ async def get_items_for_user(user_id: int, bot: Bot, cookie_mgr: CookieManager):
     async with aiohttp.ClientSession() as session:
         for link in user.links:
             url_api = convert_client_to_api_url(link.link)
-            user_agent = cookie_mgr.user_agent
             session_cookie = await cookie_mgr.get_cookie()
-            headers = {"User-Agent": user_agent, "Cookie": session_cookie}
+            user_agent = cookie_mgr.user_agent
+            headers = {
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+                "User-Agent": user_agent,
+                "Cookie": session_cookie,
+            }
 
             data = await fetch_data(session, url_api, headers)
             if data:
@@ -141,13 +145,11 @@ async def get_items_for_user(user_id: int, bot: Bot, cookie_mgr: CookieManager):
 
 
 async def periodic_check(bot: Bot):
-    # Инициализируем CookieManager на первую ссылку (предполагаем, все ссылки одного домена)
     all_users = await get_all_users()
     if not all_users:
         return
     first_link = (await get_users_link_list(all_users[0].user_id)).links[0].link
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " \
-                 "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    user_agent = random.choice(USER_AGENTS)
     cookie_mgr = CookieManager(baseurl=first_link, user_agent=user_agent)
 
     while True:
