@@ -7,6 +7,13 @@ class Settings(BaseSettings):
     # для конфиденциальных данных, например, токена бота
     bot_token: SecretStr
     admins: SecretStr
+
+    # SmartProxy settings
+    smartproxy_username: SecretStr
+    smartproxy_password: SecretStr
+    smartproxy_endpoint: str = "dc.decodo.com"
+    smartproxy_port: str = "10000"
+
     # Начиная со второй версии pydantic, настройки класса настроек задаются
     # через model_config
     # В данном случае будет использоваться файла .env, который будет прочитан

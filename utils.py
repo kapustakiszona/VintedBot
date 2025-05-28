@@ -62,7 +62,7 @@ def convert_client_to_api_url(client_url):
     # Базовые параметры API
     api_params = {
         "page": query_params.get("page", ["1"])[0],
-        "per_page": "10",
+        "per_page": "5",
     }
 
     # Преобразуем параметры в API-формат

@@ -1,19 +1,22 @@
 import asyncio
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Optional, List
 
-import cloudscraper
 import aiohttp
 from aiogram import Bot, types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, exists
 
+from config_reader import config
 from data_base.base import connection
 from data_base.dao import add_sent_item, get_users_link_list, get_all_users, get_user_filter_words
 from data_base.models import SentItem
 from utils import convert_client_to_api_url
+
+# Формируем список прокси
+PROXY_URL = f"http://{config.smartproxy_username.get_secret_value()}:{config.smartproxy_password.get_secret_value()}@{config.smartproxy_endpoint}:{config.smartproxy_port}"
 
 # Пул User-Agent для ротации
 USER_AGENTS = [
@@ -23,45 +26,191 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.1901.183 Safari/537.36 Edg/115.0.1901.183",
 ]
 
-class CookieManager:
+
+class SessionManager:
     def __init__(self, baseurl: str, user_agent: str):
         self.baseurl = baseurl
         self.user_agent = user_agent
-        self.cookie: Optional[str] = None
-        self.expiry: datetime = datetime.min
+        self.cookies = {}
+        self.last_cookie_update = datetime.now(UTC)
         self.lock = asyncio.Lock()
+        self.consecutive_failures = 0
 
-    async def _fetch_and_parse(self) -> None:
-        # Используем cloudscraper для прохождения CF challenge
-        scraper = cloudscraper.create_scraper()
-        scraper.headers.update({"User-Agent": self.user_agent})
-        resp = scraper.get(self.baseurl)
-        if resp.status_code != 200:
-            raise RuntimeError(f"CF challenge failed: {resp.status_code}")
-        # Собираем куки и expiry не отслеживается (можно задать ttl вручную)
-        cookies = scraper.cookies.get_dict()
-        self.cookie = "; ".join(f"{k}={v}" for k, v in cookies.items())
-        # Не все куки имеют expires, установим короткий TTL, чтобы обновлять часто
-        self.expiry = datetime.utcnow() + timedelta(minutes=30)
+    async def _fetch_cookies(self, session: aiohttp.ClientSession) -> bool:
+        """Получает куки с главной страницы"""
+        try:
+            headers = {
+                "User-Agent": self.user_agent,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
+            }
 
-    async def get_cookie(self) -> str:
-        async with self.lock:
-            if not self.cookie or datetime.utcnow() >= self.expiry:
-                await self._fetch_and_parse()
-            return self.cookie or ""
+            async with session.get(
+                    self.baseurl,
+                    headers=headers,
+                    proxy=PROXY_URL,
+                    verify_ssl=True,
+                    allow_redirects=True
+            ) as response:
+                if response.status == 200:
+                    self.cookies = {k: v.value for k, v in response.cookies.items()}
+                    self.last_cookie_update = datetime.now(UTC)
+                    self.consecutive_failures = 0
+                    return True
+                else:
+                    self.consecutive_failures += 1
+                    logging.error(f"Failed to fetch cookies, status: {response.status}")
+                    return False
+
+        except Exception as e:
+            self.consecutive_failures += 1
+            logging.error(f"Error fetching cookies: {str(e)}")
+            return False
+
+    def _should_update_cookies(self) -> bool:
+        """Проверяет, нужно ли обновить куки"""
+        if not self.cookies:
+            return True
+
+        # Обновляем куки каждый час или если были ошибки
+        if (datetime.now(UTC) - self.last_cookie_update) > timedelta(hours=1):
+            return True
+
+        return self.consecutive_failures >= 3
+
+    def get_headers(self) -> dict:
+        """Возвращает заголовки для запроса"""
+        headers = {
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": self.user_agent,
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
+            "X-Requested-With": "XMLHttpRequest"
+        }
+
+        if self.cookies:
+            cookie_str = "; ".join([f"{k}={v}" for k, v in self.cookies.items()])
+            headers["Cookie"] = cookie_str
+
+        return headers
 
 
-async def fetch_data(session: aiohttp.ClientSession, url: str, headers: dict) -> Optional[dict]:
-    try:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                return await response.json()
-            logging.error(f"Ошибка: {response.status}, текст: {await response.text()}")
-    except aiohttp.ClientError as e:
-        logging.error(f"Ошибка запроса: {e}")
-    except ValueError:
-        logging.error("Ответ не является JSON.")
+async def fetch_data(session: aiohttp.ClientSession, url: str, headers: dict, session_mgr: SessionManager) -> Optional[
+    dict]:
+    max_retries = 3
+    base_delay = 5  # начальная задержка в секундах
+
+    for attempt in range(max_retries):
+        try:
+            # Проверяем, нужно ли обновить куки
+            if session_mgr._should_update_cookies():
+                await session_mgr._fetch_cookies(session)
+                # Обновляем заголовки с новыми куками
+                headers = session_mgr.get_headers()
+
+            async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=30,
+                    proxy=PROXY_URL,
+                    verify_ssl=True,
+                    compress=True
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                elif response.status == 403:
+                    logging.error("Получен код 403 (возможно, блокировка Cloudflare)")
+                    # Пробуем обновить куки при 403 ошибке
+                    await session_mgr._fetch_cookies(session)
+                    await asyncio.sleep(60 * (attempt + 1))
+                elif response.status == 429:
+                    logging.error("Получен код 429 (слишком много запросов)")
+                    await asyncio.sleep(30 * (attempt + 1))
+                else:
+                    logging.error(f"Ошибка: {response.status}, текст: {await response.text()}")
+                    await asyncio.sleep(base_delay * (2 ** attempt))
+
+        except aiohttp.ClientError as e:
+            logging.error(f"Ошибка запроса: {e}")
+            await asyncio.sleep(base_delay * (2 ** attempt))
+        except asyncio.TimeoutError:
+            logging.error("Timeout error")
+            await asyncio.sleep(base_delay * (2 ** attempt))
+        except ValueError as e:
+            logging.error(f"Ошибка парсинга JSON: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"Неожиданная ошибка: {e}")
+            await asyncio.sleep(base_delay * (2 ** attempt))
+
     return None
+
+
+async def get_items_for_user(user_id: int, bot: Bot, session_mgr: SessionManager):
+    user = await get_users_link_list(user_id)
+    if not user or not user.links:
+        return
+
+    async with aiohttp.ClientSession() as session:
+        for link in user.links:
+            url_api = convert_client_to_api_url(link.link)
+            headers = session_mgr.get_headers()
+
+            data = await fetch_data(session, url_api, headers, session_mgr)
+            if data:
+                await parse_items(data.get('items', []), user_id, link, bot)
+            else:
+                logging.error("Ошибка при получении данных.")
+
+
+async def periodic_check(bot: Bot):
+    all_users = await get_all_users()
+    if not all_users:
+        return
+
+    first_link = (await get_users_link_list(all_users[0].user_id)).links[0].link
+    user_agent = random.choice(USER_AGENTS)
+    session_mgr = SessionManager(baseurl=first_link, user_agent=user_agent)
+
+    # Создаем словарь для отслеживания времени последнего запроса для каждого пользователя
+    last_check_times = {user.user_id: datetime.now(UTC) for user in all_users}
+
+    while True:
+        current_time = datetime.now(UTC)
+
+        for user in await get_all_users():
+            # Проверяем, прошло ли достаточно времени с последней проверки для этого пользователя
+            if user.user_id not in last_check_times:
+                last_check_times[user.user_id] = datetime.now(UTC)
+
+            time_since_last_check = (current_time - last_check_times[user.user_id]).total_seconds()
+
+            # Минимальный интервал между запросами для одного пользователя
+            min_interval = 15  # секунд
+
+            if time_since_last_check >= min_interval:
+                try:
+                    # Добавляем случайную задержку от 0 до 5 секунд для распределения нагрузки
+                    await asyncio.sleep(random.uniform(0, 5))
+
+                    # Обновляем время последней проверки
+                    last_check_times[user.user_id] = current_time
+
+                    # Выполняем проверку для пользователя
+                    await get_items_for_user(user.user_id, bot, session_mgr)
+
+                except Exception as e:
+                    logging.error(f"Ошибка при проверке для пользователя {user.user_id}: {e}")
+                    # Добавляем дополнительную задержку при ошибке
+                    await asyncio.sleep(random.uniform(5, 15))
+
+        # Случайная задержка между циклами проверки всех пользователей
+        await asyncio.sleep(random.uniform(15, 30))
 
 
 @connection
@@ -118,45 +267,3 @@ async def parse_items(session, items_data: List[dict], user_id: int, link, bot: 
                             )
                             new_items.append(f"New item: {item_title} - {item_url}")
     return new_items
-
-
-async def get_items_for_user(user_id: int, bot: Bot, cookie_mgr: CookieManager):
-    user = await get_users_link_list(user_id)
-    if not user or not user.links:
-        return
-
-    async with aiohttp.ClientSession() as session:
-        for link in user.links:
-            url_api = convert_client_to_api_url(link.link)
-            session_cookie = await cookie_mgr.get_cookie()
-            user_agent = cookie_mgr.user_agent
-            headers = {
-                "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest",
-                "User-Agent": user_agent,
-                "Cookie": session_cookie,
-            }
-
-            data = await fetch_data(session, url_api, headers)
-            if data:
-                await parse_items(data.get('items', []), user_id, link, bot)
-            else:
-                logging.error("Ошибка при получении данных.")
-
-
-async def periodic_check(bot: Bot):
-    all_users = await get_all_users()
-    if not all_users:
-        return
-    first_link = (await get_users_link_list(all_users[0].user_id)).links[0].link
-    user_agent = random.choice(USER_AGENTS)
-    cookie_mgr = CookieManager(baseurl=first_link, user_agent=user_agent)
-
-    while True:
-        users = await get_all_users()
-        tasks = [get_items_for_user(u.user_id, bot, cookie_mgr) for u in users]
-        try:
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            logging.error(f"Ошибка сбора задач: {e}")
-        await asyncio.sleep(15)
