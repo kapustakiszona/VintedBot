@@ -179,9 +179,22 @@ async def periodic_check(bot: Bot):
 
     # Создаем словарь для отслеживания времени последнего запроса для каждого пользователя
     last_check_times = {user.user_id: datetime.now(UTC) for user in all_users}
+    last_mode_log = None  # Для отслеживания изменения режима
 
     while True:
         current_time = datetime.now(UTC)
+        current_hour = current_time.hour
+
+        # Определяем режим работы и интервалы
+        is_night_mode = 0 <= current_hour < 7
+        min_interval = 120 if is_night_mode else 15  # секунд
+
+        # Логируем изменение режима работы только при его смене
+        current_mode = "ночной" if is_night_mode else "дневной"
+        if last_mode_log != current_mode:
+            logging.info(f"Режим работы: {current_mode}")
+            logging.info(f"Интервал между запросами: {min_interval} секунд")
+            last_mode_log = current_mode
 
         for user in await get_all_users():
             # Проверяем, прошло ли достаточно времени с последней проверки для этого пользователя
@@ -190,13 +203,13 @@ async def periodic_check(bot: Bot):
 
             time_since_last_check = (current_time - last_check_times[user.user_id]).total_seconds()
 
-            # Минимальный интервал между запросами для одного пользователя
-            min_interval = 15  # секунд
-
             if time_since_last_check >= min_interval:
                 try:
-                    # Добавляем случайную задержку от 0 до 5 секунд для распределения нагрузки
-                    await asyncio.sleep(random.uniform(0, 5))
+                    # В ночное время увеличиваем случайную задержку
+                    max_random_delay = 10 if is_night_mode else 5
+                    delay = random.uniform(0, max_random_delay)
+                    logging.debug(f"Задержка перед запросом: {delay:.1f} сек")
+                    await asyncio.sleep(delay)
 
                     # Обновляем время последней проверки
                     last_check_times[user.user_id] = current_time
@@ -210,7 +223,9 @@ async def periodic_check(bot: Bot):
                     await asyncio.sleep(random.uniform(5, 15))
 
         # Случайная задержка между циклами проверки всех пользователей
-        await asyncio.sleep(random.uniform(15, 30))
+        cycle_delay = random.uniform(30, 60) if is_night_mode else random.uniform(15, 30)
+        logging.debug(f"Задержка между циклами: {cycle_delay:.1f} сек")
+        await asyncio.sleep(cycle_delay)
 
 
 @connection
